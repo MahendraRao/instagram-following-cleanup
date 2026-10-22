@@ -48,7 +48,7 @@ feature has been added.
 ## Installation
 
 ```bash
-git clone https://github.com/YOUR_GITHUB_USERNAME/instagram-following-cleanup.git
+git clone https://github.com/MahendraRao/instagram-following-cleanup.git
 cd instagram-following-cleanup
 npm install
 ```
