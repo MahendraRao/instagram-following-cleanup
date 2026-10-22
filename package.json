@@ -1,0 +1,29 @@
+{
+  "name": "instagram-following-cleanup",
+  "version": "1.0.0",
+  "description": "A cautious local Playwright utility for cleaning up an Instagram Following list in small batches.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check scripts/unfollow-instagram.js",
+    "unfollow": "node scripts/unfollow-instagram.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MahendraRao/instagram-following-cleanup.git"
+  },
+  "keywords": [
+    "instagram",
+    "playwright",
+    "browser-automation",
+    "account-cleanup"
+  ],
+  "author": "Mahendra Rao",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "playwright": "^1.61.0"
+  }
+}
