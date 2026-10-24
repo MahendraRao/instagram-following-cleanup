@@ -109,10 +109,11 @@ Press `Control+C` at any time to stop.
 Instagram changes its interface periodically. Selectors may need maintenance if
 the dialog or button labels change.
 
-The dialog shell can appear before Instagram finishes loading its rows. The tool
-waits up to 90 seconds for an actionable row and reacquires the dialog whenever
-Instagram replaces it. A loading failure is reported as an error instead of a
-misleading successful `0 account(s) unfollowed` result.
+The dialog shell can appear before Instagram finishes loading its title and
+rows. The tool recognizes the modal shell immediately, waits up to 90 seconds
+for an actionable row, and reacquires the dialog whenever Instagram replaces
+it. A loading failure is reported as an error instead of a misleading
+successful `0 account(s) unfollowed` result.
 
 ## Safety and privacy
 

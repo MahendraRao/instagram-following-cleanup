@@ -86,7 +86,7 @@ async function waitForOwnedProfile(page, username) {
 }
 
 async function openFollowingDialog(page, username) {
-  if (await followingDialog(page).isVisible().catch(() => false)) return;
+  if (await activeDialog(page).isVisible().catch(() => false)) return;
 
   const candidates = [
     page.locator(`a[href="/${username}/following/"]`).first(),
@@ -98,7 +98,13 @@ async function openFollowingDialog(page, username) {
     for (const candidate of candidates) {
       if (await candidate.isVisible().catch(() => false)) {
         console.log('Opening the Following list...');
-        await candidate.click();
+        try {
+          await candidate.click({ timeout: 10_000 });
+        } catch (error) {
+          // Instagram may open the modal between the visibility check and click.
+          if (await activeDialog(page).isVisible().catch(() => false)) return;
+          throw error;
+        }
         return;
       }
     }
@@ -114,7 +120,7 @@ async function waitForFollowingDialog(page, username) {
   let lastOpenAttempt = Date.now();
 
   while (Date.now() < deadline) {
-    if (await followingDialog(page).isVisible().catch(() => false)) return;
+    if (await activeDialog(page).isVisible().catch(() => false)) return;
 
     if (Date.now() - lastOpenAttempt >= 10_000) {
       await openFollowingDialog(page, username);
@@ -134,7 +140,7 @@ async function performUnfollows(page, username, limit) {
   let lastReopenAttempt = 0;
 
   while (processed < limit) {
-    const dialog = followingDialog(page);
+    const dialog = activeDialog(page);
     const dialogVisible = await dialog.isVisible().catch(() => false);
     const followingButton = dialogVisible
       ? await firstVisibleFollowingButton(dialog)
@@ -181,7 +187,7 @@ async function performUnfollows(page, username, limit) {
     const confirm = page.getByRole('button', { name: /^Unfollow$/i }).last();
     await confirm.waitFor({ state: 'visible', timeout: 15_000 });
     await confirm.click();
-    await confirm.waitFor({ state: 'hidden', timeout: 15_000 }).catch(() => {});
+    await confirm.waitFor({ state: 'hidden', timeout: 15_000 });
 
     processed += 1;
     waitingMessageShown = false;
@@ -205,7 +211,7 @@ async function previewAccounts(page, username, limit) {
   let lastReopenAttempt = 0;
 
   while (seen.size < limit) {
-    const dialog = followingDialog(page);
+    const dialog = activeDialog(page);
     const dialogVisible = await dialog.isVisible().catch(() => false);
 
     if (!dialogVisible) {
@@ -271,8 +277,8 @@ async function accountNameNear(button) {
   }).catch(() => '(visible account)');
 }
 
-function followingDialog(page) {
-  return page.locator('div[role="dialog"]').filter({ hasText: /Following/i }).last();
+function activeDialog(page) {
+  return page.locator('div[role="dialog"][aria-modal="true"]').last();
 }
 
 async function firstVisibleFollowingButton(dialog) {
@@ -288,7 +294,7 @@ async function firstVisibleFollowingButton(dialog) {
 }
 
 async function scrollDialog(page) {
-  const dialog = followingDialog(page);
+  const dialog = activeDialog(page);
 
   return dialog.evaluate((root) => {
     const candidates = [root, ...root.querySelectorAll('*')]
