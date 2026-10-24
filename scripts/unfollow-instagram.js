@@ -11,6 +11,7 @@ const limit = positiveInteger(args.limit, 10, '--limit');
 const minDelay = positiveInteger(args['min-delay'], 60_000, '--min-delay');
 const maxDelay = positiveInteger(args['max-delay'], 120_000, '--max-delay');
 const profileDir = String(args['profile-dir'] ?? '.ig-browser-data');
+const rowLoadTimeout = positiveInteger(args['row-timeout'], 90_000, '--row-timeout');
 
 if (limit > 50) {
   fail('--limit cannot exceed 50. Use small batches and wait between runs.');
@@ -48,13 +49,11 @@ async function main() {
 
   await waitForOwnedProfile(page, username);
   await openFollowingDialog(page, username);
-
-  const dialog = page.locator('div[role="dialog"]').last();
-  await dialog.waitFor({ state: 'visible' });
+  await waitForFollowingDialog(page, username);
 
   const processed = shouldRun
-    ? await performUnfollows(page, dialog, limit)
-    : await previewAccounts(page, dialog, limit);
+    ? await performUnfollows(page, username, limit)
+    : await previewAccounts(page, username, limit);
 
   console.log(`\nFinished: ${processed} account(s) ${shouldRun ? 'unfollowed' : 'previewed'}.`);
   console.log('Close the browser window when you are finished checking the result.');
@@ -87,6 +86,8 @@ async function waitForOwnedProfile(page, username) {
 }
 
 async function openFollowingDialog(page, username) {
+  if (await followingDialog(page).isVisible().catch(() => false)) return;
+
   const candidates = [
     page.locator(`a[href="/${username}/following/"]`).first(),
     page.getByRole('link', { name: /following/i }).first(),
@@ -108,46 +109,114 @@ async function openFollowingDialog(page, username) {
   throw new Error('Could not find the Following counter. No actions were taken.');
 }
 
-async function performUnfollows(page, dialog, limit) {
+async function waitForFollowingDialog(page, username) {
+  const deadline = Date.now() + 60_000;
+  let lastOpenAttempt = Date.now();
+
+  while (Date.now() < deadline) {
+    if (await followingDialog(page).isVisible().catch(() => false)) return;
+
+    if (Date.now() - lastOpenAttempt >= 10_000) {
+      await openFollowingDialog(page, username);
+      lastOpenAttempt = Date.now();
+    }
+
+    await page.waitForTimeout(1000);
+  }
+
+  throw new Error('The Following dialog did not open within 60 seconds. No actions were taken.');
+}
+
+async function performUnfollows(page, username, limit) {
   let processed = 0;
-  let noButtonPasses = 0;
+  let idleSince = Date.now();
+  let waitingMessageShown = false;
+  let lastReopenAttempt = 0;
 
-  while (processed < limit && noButtonPasses < 8) {
-    const followingButton = dialog.getByRole('button', { name: /^Following$/i }).first();
+  while (processed < limit) {
+    const dialog = followingDialog(page);
+    const dialogVisible = await dialog.isVisible().catch(() => false);
+    const followingButton = dialogVisible
+      ? await firstVisibleFollowingButton(dialog)
+      : null;
 
-    if (!await followingButton.isVisible().catch(() => false)) {
-      noButtonPasses += 1;
-      await scrollDialog(dialog);
+    if (!followingButton) {
+      if (!waitingMessageShown) {
+        console.log('Waiting for Instagram to load the next Following entry...');
+        waitingMessageShown = true;
+      }
+
+      if (dialogVisible) {
+        await scrollDialog(page);
+      } else if (Date.now() - lastReopenAttempt >= 10_000) {
+        console.log('The Following dialog was replaced or closed; reopening it...');
+        await openFollowingDialog(page, username);
+        lastReopenAttempt = Date.now();
+      }
+
+      if (Date.now() - idleSince >= rowLoadTimeout) {
+        throw new Error(
+          `Instagram did not load another Following entry within ${Math.round(rowLoadTimeout / 1000)} seconds. `
+          + `${processed} account(s) were completed in this run.`,
+        );
+      }
+
       await page.waitForTimeout(1500);
       continue;
     }
 
     const account = await accountNameNear(followingButton);
     console.log(`[${processed + 1}/${limit}] Unfollowing ${account}`);
-    await followingButton.click();
+    try {
+      await followingButton.click();
+    } catch (error) {
+      if (isTransientLocatorError(error)) {
+        console.log('Instagram refreshed the list; retrying the current entry...');
+        await page.waitForTimeout(1000);
+        continue;
+      }
+      throw error;
+    }
 
     const confirm = page.getByRole('button', { name: /^Unfollow$/i }).last();
-    await confirm.waitFor({ state: 'visible', timeout: 10_000 });
+    await confirm.waitFor({ state: 'visible', timeout: 15_000 });
     await confirm.click();
+    await confirm.waitFor({ state: 'hidden', timeout: 15_000 }).catch(() => {});
 
     processed += 1;
-    noButtonPasses = 0;
+    waitingMessageShown = false;
 
     if (processed < limit) {
       const delay = randomInteger(minDelay, maxDelay);
       console.log(`Waiting ${Math.round(delay / 1000)} seconds...`);
       await page.waitForTimeout(delay);
     }
+
+    idleSince = Date.now();
   }
 
   return processed;
 }
 
-async function previewAccounts(page, dialog, limit) {
+async function previewAccounts(page, username, limit) {
   const seen = new Set();
-  let unchangedPasses = 0;
+  let unchangedSince = Date.now();
+  let waitingMessageShown = false;
+  let lastReopenAttempt = 0;
 
-  while (seen.size < limit && unchangedPasses < 8) {
+  while (seen.size < limit) {
+    const dialog = followingDialog(page);
+    const dialogVisible = await dialog.isVisible().catch(() => false);
+
+    if (!dialogVisible) {
+      if (Date.now() - lastReopenAttempt >= 10_000) {
+        await openFollowingDialog(page, username);
+        lastReopenAttempt = Date.now();
+      }
+      await page.waitForTimeout(1000);
+      continue;
+    }
+
     const buttons = dialog.getByRole('button', { name: /^Following$/i });
     const count = await buttons.count();
     const before = seen.size;
@@ -163,8 +232,25 @@ async function previewAccounts(page, dialog, limit) {
       console.log(`[dry run ${seen.size}/${limit}] Would unfollow ${account}`);
     }
 
-    unchangedPasses = seen.size === before ? unchangedPasses + 1 : 0;
-    await scrollDialog(dialog);
+    if (seen.size > before) {
+      unchangedSince = Date.now();
+      waitingMessageShown = false;
+    } else if (!waitingMessageShown) {
+      console.log('Waiting for Instagram to load more Following entries...');
+      waitingMessageShown = true;
+    }
+
+    if (Date.now() - unchangedSince >= rowLoadTimeout) {
+      if (seen.size === 0) {
+        throw new Error(
+          `Instagram did not load any Following entries within ${Math.round(rowLoadTimeout / 1000)} seconds.`,
+        );
+      }
+      console.log(`No additional Following entries loaded after ${Math.round(rowLoadTimeout / 1000)} seconds.`);
+      break;
+    }
+
+    await scrollDialog(page);
     await page.waitForTimeout(1000);
   }
 
@@ -185,14 +271,40 @@ async function accountNameNear(button) {
   }).catch(() => '(visible account)');
 }
 
-async function scrollDialog(dialog) {
-  await dialog.evaluate((root) => {
+function followingDialog(page) {
+  return page.locator('div[role="dialog"]').filter({ hasText: /Following/i }).last();
+}
+
+async function firstVisibleFollowingButton(dialog) {
+  const buttons = dialog.getByRole('button', { name: /^Following$/i });
+  const count = await buttons.count().catch(() => 0);
+
+  for (let index = 0; index < count; index += 1) {
+    const button = buttons.nth(index);
+    if (await button.isVisible().catch(() => false)) return button;
+  }
+
+  return null;
+}
+
+async function scrollDialog(page) {
+  const dialog = followingDialog(page);
+
+  return dialog.evaluate((root) => {
     const candidates = [root, ...root.querySelectorAll('*')]
       .filter((element) => element.scrollHeight > element.clientHeight + 20)
-      .sort((a, b) => b.clientHeight - a.clientHeight);
+      .sort(
+        (a, b) => (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight),
+      );
 
     candidates[0]?.scrollBy({ top: 800, behavior: 'instant' });
-  });
+    return candidates.length > 0;
+  }).catch(() => false);
+}
+
+function isTransientLocatorError(error) {
+  const message = String(error?.message ?? error);
+  return /detached|not attached|closed|timeout/i.test(message);
 }
 
 function parseArgs(argv) {

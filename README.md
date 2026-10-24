@@ -90,6 +90,7 @@ Press `Control+C` at any time to stop.
 | `--limit <1-50>` | Maximum accounts processed in one run | `10` |
 | `--min-delay <ms>` | Minimum delay after each action | `60000` |
 | `--max-delay <ms>` | Maximum delay after each action | `120000` |
+| `--row-timeout <ms>` | Maximum wait for Instagram to load another row | `90000` |
 | `--profile-dir <path>` | Local browser-session directory | `.ig-browser-data` |
 
 ## How it works
@@ -107,6 +108,11 @@ Press `Control+C` at any time to stop.
 
 Instagram changes its interface periodically. Selectors may need maintenance if
 the dialog or button labels change.
+
+The dialog shell can appear before Instagram finishes loading its rows. The tool
+waits up to 90 seconds for an actionable row and reacquires the dialog whenever
+Instagram replaces it. A loading failure is reported as an error instead of a
+misleading successful `0 account(s) unfollowed` result.
 
 ## Safety and privacy
 
